@@ -10,13 +10,11 @@ def generate_truncated_noise(mean, cov, trunc_threshold):
     トランケーションされた多変量ガウス分布からサンプルを生成する。
     (scipy.spatial.distance.mahalanobis 関数を使用)
     """
-    # スカラー入力をベクトル/行列に変換
     if np.isscalar(mean):
         mean = np.array([mean])
     if np.isscalar(cov):
         cov = np.array([[cov]])
 
-    # 共分散行列の逆行列を事前計算
     try:
         inv_cov = np.linalg.inv(cov)
     except np.linalg.LinAlgError:
@@ -54,14 +52,21 @@ def build_Q_star(Q, n):
 # --- System ---
 
 class System:
-    def __init__(self, theta_true):
+    def __init__(self, theta_true, known_params, unknown_indices):
         self.nx = 3
         self.nu = 1
-        
-        # --- 12個の未知パラメータを導入 ---
-        self.ntheta = 12  # A: 3x3=9, B: 3x1=3 -> 9+3=12
-        self.ns = self.nx + self.ntheta # 拡張状態の次元: 3 + 12 = 15
+
+        # --- 未知パラメータの情報を格納 ---
+        self.ntheta = len(theta_true)  # 未知パラメータの数
         self.theta_true = theta_true
+        self.known_params = known_params
+        self.unknown_indices = unknown_indices # (row, col)のタプルのリスト
+        self.unknown_indices_flat = [i * self.nx + j for i, j in unknown_indices] # A行列のフラットなインデックス
+
+        self.ns = self.nx + self.ntheta # 拡張状態の次元
+        
+        # --- B行列は既知 ---
+        self.B_true_matrix = np.array([[0.0], [1.0], [0.0]])
 
         # コスト行列 (拡張状態に対応)
         self.Q = np.eye(self.nx)
@@ -80,24 +85,35 @@ class System:
         ])
         self.Sigma_v = np.array([[0.2]])
 
-    def A_matrix(self, theta):
-        """ パラメータthetaから遷移行列Aを生成 """
-        return theta[:9].reshape((3, 3))
+    # 未知パラメータと既知パラメータを組み合わせて完全なthetaを構築するヘルパー関数
+    def _build_full_A_theta(self, unknown_theta):
+        """未知パラメータ(ntheta次元)からAの全パラメータ(9次元)を復元"""
+        full_A_theta = np.copy(self.known_params['A'])
+        for i, flat_idx in enumerate(self.unknown_indices_flat):
+            full_A_theta[flat_idx] = unknown_theta[i]
+        return full_A_theta
 
-    def B_matrix(self, theta):
-        """ パラメータthetaから入力行列Bを生成 """
-        return theta[9:].reshape((3, 1))
+    def A_matrix(self, theta_A):
+        """ Aのパラメータ(9次元)から遷移行列Aを生成 """
+        return theta_A.reshape((3, 3))
+
+    def B_matrix(self, theta_B=None):
+        """ Bは固定値（既知）なので、引数なしで固定値を返す """
+        return self.B_true_matrix
 
     def f(self, s, u):
         """ 拡張状態方程式 f_aug(s, u) """
         x = s[:self.nx]
-        theta = s[self.nx:]
+        unknown_theta = s[self.nx:]
         
-        A = self.A_matrix(theta)
-        B = self.B_matrix(theta)
+        # --- 未知パラメータと既知パラメータを結合 ---
+        theta_A_full = self._build_full_A_theta(unknown_theta)
+        
+        A = self.A_matrix(theta_A_full)
+        B = self.B_matrix() # Bは固定
         
         x_next = A @ x + B @ u
-        theta_next = theta # パラメータは時間不変
+        theta_next = unknown_theta # パラメータは時間不変
         
         return np.concatenate([x_next.flatten(), theta_next])
 
@@ -110,23 +126,19 @@ class System:
     def F(self, s, u):
         """ 拡張状態方程式のヤコビアン F_aug """
         x = s[:self.nx]
-        theta = s[self.nx:]
+        unknown_theta = s[self.nx:]
         
-        A = self.A_matrix(theta)
+        theta_A_full = self._build_full_A_theta(unknown_theta)
+        A = self.A_matrix(theta_A_full)
         
-        # --- ヤコビアンの各ブロックを計算 ---
         # ∂f/∂x
         F_xx = A
         
-        # ∂f/∂θ
+        # --- 変更点：ヤコビアンの計算を未知パラメータのみに対して行う ---
+        # ∂f/∂θ (θは未知パラメータのみ)
         F_xtheta = np.zeros((self.nx, self.ntheta))
-        # d(Ax)/d(vec(A))
-        for i in range(self.nx):
-            for j in range(self.nx):
-                F_xtheta[i, i * self.nx + j] = x[j]
-        # d(Bu)/d(vec(B))
-        for i in range(self.nx):
-            F_xtheta[i, 9 + i] = u[0] if isinstance(u, (np.ndarray, list)) else u
+        for i, (row, col) in enumerate(self.unknown_indices):
+            F_xtheta[row, i] = x[col]
 
         # ∂θ/∂x, ∂θ/∂θ
         F_thetax = np.zeros((self.ntheta, self.nx))
@@ -148,6 +160,7 @@ class System:
         H_theta = np.zeros((1, self.ntheta))
         
         return np.hstack([H_x, H_theta])
+
 
 # --- Algorithms ---
 
@@ -201,8 +214,9 @@ class LQR:
 def design_ce_lqr(system):
     print("CE-LQRの設計を開始します...")
     lqr = LQR()
-    A_true = system.A_matrix(system.theta_true)
-    B_true = system.B_matrix(system.theta_true)
+    A_true_theta = system._build_full_A_theta(system.theta_true)
+    A_true = system.A_matrix(A_true_theta)
+    B_true = system.B_matrix()
     K_ce = lqr.solve(A_true, B_true, system.Q, system.R)   
     print("CE-LQR controllerを設計しました。")
     return K_ce

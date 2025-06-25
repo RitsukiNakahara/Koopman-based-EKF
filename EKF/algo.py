@@ -1,7 +1,33 @@
 import numpy as np
 from scipy.linalg import solve_discrete_are
+from scipy.spatial.distance import mahalanobis
 
 # --- Functions ---
+
+def generate_truncated_noise(mean, cov, trunc_threshold):
+    """
+    マハラノビス距離に基づく棄却サンプリングを用いて、
+    トランケーションされた多変量ガウス分布からサンプルを生成する。
+    (scipy.spatial.distance.mahalanobis 関数を使用)
+    """
+    # スカラー入力をベクトル/行列に変換
+    if np.isscalar(mean):
+        mean = np.array([mean])
+    if np.isscalar(cov):
+        cov = np.array([[cov]])
+
+    # 共分散行列の逆行列を事前計算
+    try:
+        inv_cov = np.linalg.inv(cov)
+    except np.linalg.LinAlgError:
+        inv_cov = np.linalg.pinv(cov)
+
+    while True:
+        sample = np.random.multivariate_normal(mean, cov)
+        dist = mahalanobis(sample, mean, inv_cov)
+
+        if dist <= trunc_threshold:
+            return sample
 
 def elu(x):
     return np.where(x >= 0, x, np.exp(x) - 1)
@@ -135,7 +161,7 @@ def design_soc_lqr(system, N_data, dict_func):
 
     for k in range(N_data):
         eta_data[:, k] = np.concatenate([x_p, vec_cholesky(Sigma_p)])
-        u_k = np.sqrt(0.2)*np.random.randn(nu)
+        u_k = generate_truncated_noise(np.zeros(nu), 0.2, 2)
         u_data[:, k] = u_k
         
         F_p = system.F(x_p, u_k)
