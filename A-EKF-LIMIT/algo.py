@@ -223,17 +223,24 @@ def design_ce_lqr(system):
 
 def design_soc_lqr(system, N_data, dict_func):
     print("SOC-LQRのオフライン学習を開始します...")
-    ns, nu = system.ns, system.nu
-    size_l = ns * (ns + 1) // 2
-    size_eta = ns + size_l
+    nx, nu = system.nx, system.nu
+    size_l = nx * (nx + 1) // 2
+    size_eta = nx + size_l
     
-    s_p = np.zeros(ns)
-    Sigma_p = np.eye(ns)
+    x_p_init = np.zeros(system.nx)
+    theta_p_init = system.theta_true + np.random.randn(system.ntheta) * 0.1 
+    s_p = np.concatenate([x_p_init, theta_p_init])
+    Sigma_p = np.eye(system.ns) * 0.1
+
     eta_data = np.zeros((size_eta, N_data))
     u_data = np.zeros((nu, N_data))
 
     for k in range(N_data):
-        eta_data[:, k] = np.concatenate([s_p, vec_cholesky(Sigma_p)])
+        print(s_p)
+        x_p = s_p[:nx]
+        Sigma_p_x = Sigma_p[:nx, :nx]
+        eta_data[:, k] = np.concatenate([x_p, vec_cholesky(Sigma_p_x)])
+        
         u_k = generate_truncated_noise(np.zeros(nu), 0.2, 2)
         u_data[:, k] = u_k
         
@@ -251,15 +258,15 @@ def design_soc_lqr(system, N_data, dict_func):
     A_lift, B_lift = dmd.fit(eta_data, u_data)
     
     lqr = LQR()
-    Q_star = build_Q_star(system.Q_aug, ns)
+    Q_star = build_Q_star(system.Q, nx)
     Q_eta = np.block([
-        [system.Q_aug, np.zeros((ns, size_l))],
-        [np.zeros((size_l, ns)), Q_star]
+        [system.Q, np.zeros((nx, size_l))],
+        [np.zeros((size_l, nx)), Q_star]
     ])
-    Q_lift = np.block([
-        [Q_eta, np.zeros((size_eta, 1))],
-        [np.zeros((1, size_eta)), np.zeros((1, 1))]
-    ])
+    
+    size_psi = size_eta + 1
+    Q_lift = np.zeros((size_psi, size_psi))
+    Q_lift[:size_eta, :size_eta] = Q_eta
     R_lift = system.R
     
     K_soc = lqr.solve(A_lift, B_lift, Q_lift, R_lift)

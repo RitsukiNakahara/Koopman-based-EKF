@@ -38,8 +38,11 @@ def run_simulation(sys, controller_type, K, dict_func, N_sim, s0_true, s0_hat, S
             x_hat = s_hat[:nx]
             u_k = -K @ x_hat
         elif controller_type == 'SOC':
-            l_k = vec_cholesky(Sigma)
-            eta_k = np.concatenate([s_hat, l_k])
+            x_hat = s_hat[:nx]
+            Sigma_x = Sigma[:nx, :nx]
+            l_k = vec_cholesky(Sigma_x)
+            eta_k = np.concatenate([x_hat, l_k])
+            
             psi_k = dict_func(eta_k.reshape(-1, 1)).flatten()
             u_k = -K @ psi_k
 
@@ -104,7 +107,7 @@ if __name__ == "__main__":
 
     # 2. Controllerの設計
     K_ce = design_ce_lqr(sys)
-    N_data = 5000
+    N_data = 10000
     dict_func = lambda eta: np.vstack([eta, np.ones(eta.shape[1])])
     K_soc = design_soc_lqr(sys, N_data, dict_func)
 
