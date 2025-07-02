@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from algo import (System, ExtendedKalmanFilter, vec_cholesky, design_ce_lqr, design_soc_lqr, generate_truncated_noise)
+from algo import (System, ExtendedKalmanFilter, vec_cholesky, design_ce_lqr, design_soc_lqr_online, generate_truncated_noise)
 
 def run_simulation(sys, controller_type, K, dict_func, N_sim, s0_true, s0_hat, Sigma0):
     ns, nx = sys.ns, sys.nx
@@ -106,10 +106,22 @@ if __name__ == "__main__":
     sys = System(theta_true=theta_true, known_params=known_params, unknown_indices=unknown_indices)
 
     # 2. Controllerの設計
+    # ---- シミュレーションと学習フェーズの初期値を共通で設定 ----
+    x0_true = generate_truncated_noise(np.zeros(sys.nx), sys.Sigma_w, 3)
+    x0_hat = np.zeros(sys.nx)
+    theta0_hat = theta_true + np.random.randn(sys.ntheta) * 0.1
+    s0_true = np.concatenate([x0_true, theta_true])
+    s0_hat = np.concatenate([x0_hat, theta0_hat])
+    
+    Sigma0 = np.eye(sys.ns)
+    Sigma0[sys.nx:, sys.nx:] *= 0.1
+
     K_ce = design_ce_lqr(sys)
-    N_data = 10000
+    
+    # ---- SOCコントローラの設計 (オンライン学習) ----
+    N_data = 5000
     dict_func = lambda eta: np.vstack([eta, np.ones(eta.shape[1])])
-    K_soc = design_soc_lqr(sys, N_data, dict_func)
+    K_soc = design_soc_lqr_online(sys, N_data, dict_func, s0_true, s0_hat, Sigma0)
 
     # 3. シミュレーションの実行
     N_sim = 1000

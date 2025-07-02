@@ -196,8 +196,10 @@ class eDMD:
         Psi_plus = self.psi(eta_data[:, 1:])
         
         Omega = np.vstack([Psi_minus, u_data[:, :-1]])
-        AB_t = np.linalg.lstsq(Omega.T, Psi_plus.T, rcond=None)[0].T
-        
+        # AB_t = np.linalg.lstsq(Omega.T, Psi_plus.T, rcond=None)[0].T
+        I = np.eye(Omega.shape[0])
+        AB_t = np.linalg.solve(Omega @ Omega.T + 1e-6 * I, Omega @ Psi_plus.T).T
+
         n_psi = Psi_minus.shape[0]
         self.A = AB_t[:, :n_psi]
         self.B = AB_t[:, n_psi:]
@@ -221,39 +223,57 @@ def design_ce_lqr(system):
     print("CE-LQR controllerを設計しました。")
     return K_ce
 
-def design_soc_lqr(system, N_data, dict_func):
-    print("SOC-LQRのオフライン学習を開始します...")
-    nx, nu = system.nx, system.nu
+def design_soc_lqr_online(system, N_data, dict_func, s0_true, s0_hat, Sigma0):
+    """
+    オンライン学習フェーズを実行してSOC-LQRコントローラを設計する。
+    """
+    print("\nSOC-LQRのオンライン学習を開始します...")
+    nx, nu, ns = system.nx, system.nu, system.ns
     size_l = nx * (nx + 1) // 2
     size_eta = nx + size_l
     
-    x_p_init = np.zeros(system.nx)
-    theta_p_init = system.theta_true + np.random.randn(system.ntheta) * 0.1 
-    s_p = np.concatenate([x_p_init, theta_p_init])
-    Sigma_p = np.eye(system.ns) * 0.1
-
+    ekf = ExtendedKalmanFilter(system)
+    
     eta_data = np.zeros((size_eta, N_data))
     u_data = np.zeros((nu, N_data))
 
+    # 初期化
+    s_hat_post, Sigma_post = s0_hat, Sigma0
+    s_true = s0_true
+    u_k = np.zeros(nu) # 最初の入力はゼロ
+
     for k in range(N_data):
-        print(s_p)
-        x_p = s_p[:nx]
-        Sigma_p_x = Sigma_p[:nx, :nx]
-        eta_data[:, k] = np.concatenate([x_p, vec_cholesky(Sigma_p_x)])
+        # 1. EKF予測
+        # 前のステップの事後推定値を使って現在の状態を予測
+        s_hat_prior, Sigma_prior = ekf.predict(s_hat_post, u_k, Sigma_post)
+
+        # 2. 探査用の入力u_kを生成
+        u_k = generate_truncated_noise(np.zeros(nu), np.eye(nu) * 0.2, 2).flatten()
         
-        u_k = generate_truncated_noise(np.zeros(nu), 0.2, 2)
+        # 3. データ収集
+        # 予測された信念状態(s_hat_prior, Sigma_prior)をデータとして保存
+        x_hat_prior = s_hat_prior[:nx]
+        Sigma_x_prior = Sigma_prior[:nx, :nx]
+        eta_data[:, k] = np.concatenate([x_hat_prior, vec_cholesky(Sigma_x_prior)])
         u_data[:, k] = u_k
         
-        F_p = system.F(s_p, u_k)
-        H_p = system.H(s_p, u_k)
+        # 4. 真のシステムを1ステップ進める
+        w_k_aug = generate_truncated_noise(np.zeros(ns), system.Sigma_w_aug, 3)
+        v_k = generate_truncated_noise(np.zeros(1), system.Sigma_v, 2)
+        s_true_next = system.f(s_true, u_k) + w_k_aug
+        s_true_next[nx:] = system.theta_true # パラメータは不変
+        
+        # 5. 次の観測を取得
+        y_k_next = system.h(s_true_next, u_k) + v_k
+        
+        # 6. EKF更新
+        # 次の観測を使って事後推定値を計算
+        s_hat_post, Sigma_post = ekf.update(s_hat_prior, y_k_next, u_k, Sigma_prior)
 
-        innovation_cov_p = H_p @ Sigma_p @ H_p.T + system.Sigma_v
-        K_p = Sigma_p @ H_p.T @ np.linalg.inv(innovation_cov_p)
-        Sigma_p_post = (np.eye(system.ns) - K_p @ H_p) @ Sigma_p
+        # 7. 真の状態を更新
+        s_true = s_true_next
 
-        s_p = system.f(s_p, u_k)
-        Sigma_p = F_p @ Sigma_p_post @ F_p.T + system.Sigma_w_aug
-
+    # eDMDによる線形モデルの学習
     dmd = eDMD(dict_func)
     A_lift, B_lift = dmd.fit(eta_data, u_data)
     
@@ -264,7 +284,7 @@ def design_soc_lqr(system, N_data, dict_func):
         [np.zeros((size_l, nx)), Q_star]
     ])
     
-    size_psi = size_eta + 1
+    size_psi = A_lift.shape[0]
     Q_lift = np.zeros((size_psi, size_psi))
     Q_lift[:size_eta, :size_eta] = Q_eta
     R_lift = system.R
