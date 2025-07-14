@@ -215,6 +215,8 @@ def design_soc_lqr(system, N_data, dict_func):
     
     s_p = np.zeros(ns)
     Sigma_p = np.eye(ns)
+    s_p[system.nx:] = system.theta_true + np.random.randn(system.ntheta) * np.sqrt(0.1)
+    Sigma_p[system.nx:, system.nx:] *= 0.1
     eta_data = np.zeros((size_eta, N_data))
     u_data = np.zeros((nu, N_data))
 

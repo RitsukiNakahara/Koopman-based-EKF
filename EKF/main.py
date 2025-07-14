@@ -78,7 +78,7 @@ if __name__ == "__main__":
 
     # 3. シミュレーションの実行
     N_sim = 1000
-    x0_true = generate_truncated_noise(np.zeros(sys.nx), sys.Sigma_w, 3)
+    x0_true = generate_truncated_noise(np.zeros(sys.nx), np.eye(sys.nx), 3)
     x0_hat = np.zeros(sys.nx)
     Sigma0 = np.eye(sys.nx)
     

@@ -74,7 +74,7 @@ def run_simulation(sys, controller_type, K, dict_func, N_sim, s0_true, s0_hat, S
 
 if __name__ == "__main__":
     # 1. 初期化
-    np.random.seed(1)
+    np.random.seed()
 
     A_true_matrix = np.array([
         [0.63, 0.54, 0.0],
@@ -84,13 +84,12 @@ if __name__ == "__main__":
     B_true_matrix = np.array([[0.0], [1.0], [0.0]])
     
     # --- 未知パラメータのインデックス (row, col) を指定 ---
-    unknown_indices = [(0, 0)] 
-    
+    unknown_indices = [(0, 0), (1, 1)]
     # --- 真値と既知パラメータを準備 ---
     theta_true_list = []
     known_A_params_flat = A_true_matrix.flatten()
     
-    # マスクを作成して未知と既知を分離
+    # 未知と既知を分離
     unknown_mask = np.zeros(A_true_matrix.size, dtype=bool)
     for r, c in unknown_indices:
         flat_idx = r * A_true_matrix.shape[1] + c
@@ -106,10 +105,10 @@ if __name__ == "__main__":
     sys = System(theta_true=theta_true, known_params=known_params, unknown_indices=unknown_indices)
 
     # 2. Controllerの設計
-    # ---- シミュレーションと学習フェーズの初期値を共通で設定 ----
-    x0_true = generate_truncated_noise(np.zeros(sys.nx), sys.Sigma_w, 3)
+    # ---- 学習の初期値を設定 ----
+    x0_true = generate_truncated_noise(np.zeros(sys.nx), np.eye(sys.nx), 3)
     x0_hat = np.zeros(sys.nx)
-    theta0_hat = theta_true + np.random.randn(sys.ntheta) * 0.1
+    theta0_hat = theta_true + np.random.randn(sys.ntheta) * np.sqrt(0.1)
     s0_true = np.concatenate([x0_true, theta_true])
     s0_hat = np.concatenate([x0_hat, theta0_hat])
     
@@ -127,16 +126,12 @@ if __name__ == "__main__":
     N_sim = 1000
     x0_true = generate_truncated_noise(np.zeros(sys.nx), sys.Sigma_w, 3)
     x0_hat = np.zeros(sys.nx)
-    
-    # --- パラメータの初期推定値 (未知パラメータに対してのみ設定) ---
-    theta0_hat = theta_true + np.random.randn(sys.ntheta) * 0.1
+
+    # --- シミュレーションの初期値を設定 ---
+    x0_true = generate_truncated_noise(np.zeros(sys.nx), np.eye(sys.nx), 3)
     s0_true = np.concatenate([x0_true, theta_true])
     s0_hat = np.concatenate([x0_hat, theta0_hat])
     
-    # --- パラメータの初期共分散行列 ---
-    Sigma0 = np.eye(sys.ns)
-    Sigma0[sys.nx:, sys.nx:] *= 0.1
-
     print("\nRunning CE-LQR simulation...")
     ce_results = run_simulation(sys, 'CE', K_ce, None, N_sim, s0_true, s0_hat, Sigma0)
     

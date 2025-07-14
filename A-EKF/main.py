@@ -86,11 +86,11 @@ if __name__ == "__main__":
 
     # 3. シミュレーションの実行
     N_sim = 1000
-    x0_true = generate_truncated_noise(np.zeros(sys.nx), sys.Sigma_w, 3)
+    x0_true = generate_truncated_noise(np.zeros(sys.nx), np.eye(sys.nx), 3)
     x0_hat = np.zeros(sys.nx)
     
     # --- パラメータの初期推定値 (真値からずらす) ---
-    theta0_hat = theta_true + np.random.randn(sys.ntheta) * 0.1
+    theta0_hat = theta_true + np.random.randn(sys.ntheta) * np.sqrt(0.1)
     s0_true = np.concatenate([x0_true, theta_true])
     s0_hat = np.concatenate([x0_hat, theta0_hat])
     
